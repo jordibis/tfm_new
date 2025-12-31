@@ -2,11 +2,11 @@
 from tensorflow.keras.datasets import cifar10,cifar100
 import numpy as np 
 import pandas as pd 
-from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout,LeakyReLU
-from keras.optimizers import Adam
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout,LeakyReLU
+from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.callbacks import ReduceLROnPlateau
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -90,7 +90,7 @@ class IncrementalLearning:
         images_ = np.array(images_, dtype=images.dtype) 
         labels_ = np.array(labels_, dtype=labels.dtype)  
         return images_, labels_
-
+    
     def data_batch(self,num_of_classes, train_images, train_labels,batch_size):
         """Crea un batch equilibrat amb mostres de cada classe."""
         size = batch_size // num_of_classes  
@@ -168,6 +168,33 @@ class IncrementalLearning:
             model.add(Dense(num_classes, activation='softmax'))
 
             return model
+        if self.tipo_CNN=='cifarnet2':
+            model = Sequential()
+
+            # --- BLOC 1 ---
+            model.add(Conv2D(32, (3, 3), padding='same', input_shape=(32, 32, 3)))
+            model.add(LeakyReLU(0.1))
+            model.add(Conv2D(32, (3, 3), padding='same'))
+            model.add(LeakyReLU(0.1))
+            model.add(MaxPooling2D(pool_size=(2, 2)))
+
+            # --- BLOC 2 ---
+            model.add(Conv2D(64, (3, 3), padding='same'))
+            model.add(LeakyReLU(0.1))
+            model.add(Conv2D(64, (3, 3), padding='same'))
+            model.add(LeakyReLU(0.1))
+            model.add(MaxPooling2D(pool_size=(2, 2)))
+
+           
+
+            # --- CLASSIFICADOR ---
+            model.add(Flatten())
+            model.add(Dense(512))
+            model.add(LeakyReLU(0.1))
+
+            model.add(Dense(num_classes, activation='softmax'))
+
+            return model
         if self.tipo_CNN=='lenet':
             model = models.Sequential([
             tf.keras.Input(shape=(32, 32, 3)),
@@ -239,7 +266,31 @@ class IncrementalLearning:
         ])
 
             return model
+    def backbone_model(self):
+        model = Sequential()
 
+        # --- BLOC 1 ---
+        model.add(Conv2D(32, (3, 3), padding='same', input_shape=(32, 32, 3)))
+        model.add(LeakyReLU(0.1))
+        model.add(Conv2D(32, (3, 3), padding='same'))
+        model.add(LeakyReLU(0.1))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
+        # --- BLOC 2 ---
+        model.add(Conv2D(64, (3, 3), padding='same'))
+        model.add(LeakyReLU(0.1))
+        model.add(Conv2D(64, (3, 3), padding='same'))
+        model.add(LeakyReLU(0.1))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
+        
+
+        # --- CLASSIFICADOR ---
+        model.add(Flatten())
+        model.add(Dense(512))
+        model.add(LeakyReLU(0.1))
+
+        return model
     def build_backbone(self):
         """Construeix el model backbone per a l'extracció de característiques."""
         inputs = Input(shape=(32, 32, 3), name="backbone_input")
@@ -455,8 +506,8 @@ class IncrementalLearning:
 
         weight_diff = current_weights - opt_weights
 
-
-
+        #print("Max diff weights EWC:", np.max(np.abs(weight_diff)))
+        #print("fisher matrix nan check:", np.isnan(fisher_matrix).any())
         # Terme EWC
         ewc_term = 0.5 * lambda_ * tf.reduce_sum(fisher_matrix * tf.square(weight_diff))
 
@@ -489,31 +540,25 @@ class IncrementalLearning:
             delta_L: Delta L actualitzat com un tf.Tensor.
 
         """
-        # Convertir a tensores planos
         old_weights = self.to_flat_tf(previous_weights)
         new_weights = self.to_flat_tf(actual_weights)
 
-        # Si alguno es None => devolvemos fisher_diag=0 y mantenemos delta_L
         if old_weights is None or new_weights is None:
             fisher_diag = tf.zeros(1, dtype=tf.float32)
             if delta_L is None:
                 delta_L = tf.zeros(1, dtype=tf.float32)
             return fisher_diag, delta_L
 
-        # Calcular delta_theta
         delta_theta = tf.abs(self.sumar_vectores_desiguales_tf(new_weights, -old_weights))
 
-        # Aplanar gradientes
         flat_grads = self.to_flat_tf(grads)
         if flat_grads is None:
             flat_grads = tf.zeros_like(delta_theta)
 
-        # Ajustar longitudes
         min_len = tf.minimum(tf.shape(delta_theta)[0], tf.shape(flat_grads)[0])
         delta_theta = delta_theta[:min_len]
         flat_grads = flat_grads[:min_len]
 
-        # Delta L actual
         delta_L_now = tf.abs(delta_theta * flat_grads)
         if delta_L is None:
             delta_L = delta_L_now
@@ -575,18 +620,15 @@ class IncrementalLearning:
         """
         Calcula el terme de regularització SI.
         """
-        # Caso inicial: todavía no tenemos fisher ni pesos óptimos
         if fisher_matrix is None or opt_weights is None:
             return tf.constant(0.0, dtype=tf.float32)
 
-        # Aplanar pesos actuales y óptimos como tensores
         current_weights = self.get_flat_weights_tf(model.trainable_variables)
         opt_weights_tf = self.get_flat_weights_tf(opt_weights)
 
         if current_weights is None or opt_weights_tf is None:
             return tf.constant(0.0, dtype=tf.float32)
 
-        # normalizar longitudes y convertir fisher a tf.Tensor
         fisher_tf = tf.convert_to_tensor(fisher_matrix, dtype=tf.float32)
 
         min_len = tf.minimum(
@@ -598,10 +640,8 @@ class IncrementalLearning:
         opt_weights_tf = opt_weights_tf[:min_len]
         fisher_tf = fisher_tf[:min_len]
 
-        # Diferencia de pesos
         weight_diff = current_weights - opt_weights_tf
 
-        # Término SI
         si_term = 0.5 * lambda_ * tf.reduce_sum(fisher_tf * tf.square(weight_diff))
         return si_term
     
@@ -626,7 +666,11 @@ class IncrementalLearning:
         plt.xlabel('Valor')
         plt.ylabel('Frecuencia')
         plt.grid(True)
-        plt.show()
+        if self.save_plots:
+            save_unique(self.metodo+'/'+f'histograma_F_step_{self.step}.png')
+            plt.close()
+        else:
+            plt.show()
 
     def to_flat_tf(self,weights):
         """
@@ -662,38 +706,65 @@ class IncrementalLearning:
             custom_loss: Funció de pèrdua personalitzada (opcional).
         Returns:
             nuevo_modelo: Model de Keras amb la capa de sortida modificada."""
-        # Guardar pesos de las capas intermedias (todas menos la última)
         pesos_intermedios = [capa.get_weights() for capa in model.layers[:-1]]
 
-        # Reconstruir el modelo con el nuevo número de clases
     
-        #nuevo_modelo = self.build_model_lenet(num_classes=new_num_classes,custom_loss=custom_loss)
         nuevo_modelo = self.build_model(num_classes=new_num_classes)
 
-        # Forzar la construcción del modelo pasando un dummy input
         dummy_input = np.random.rand(1, 32, 32, 3)
         nuevo_modelo.predict(dummy_input)
 
-        # Asignar los pesos guardados a las capas compartidas
         for i in range(len(pesos_intermedios)):
             nuevo_modelo.layers[i].set_weights(pesos_intermedios[i])
 
-        # Inicializar la nueva capa de salida:
-        # Obtener los pesos antiguos de la capa de salida
         old_weights, old_bias = model.layers[-1].get_weights()
-        # Crear nuevos pesos con la forma (número de neuronas de la penúltima capa, new_num_classes)
-        new_weights = np.random.normal(size=(old_weights.shape[0], new_num_classes))
-        new_bias = np.zeros((new_num_classes,))
+        
+        new_weights = np.full((old_weights.shape[0], new_num_classes), 0.01, dtype=np.float32)
+        new_bias = np.full((new_num_classes,), 0.01, dtype=np.float32)
 
-        # Copiar los pesos y sesgos antiguos en las primeras posiciones
         if old_num_classes<new_num_classes:
             new_weights[:, :old_num_classes] = old_weights
             new_bias[:old_num_classes] = old_bias
-            # Asignar los nuevos pesos a la capa de salida del nuevo modelo
             nuevo_modelo.layers[-1].set_weights([new_weights, new_bias])
         
         return nuevo_modelo
-    
+    def modify_output_layer_AsyCLR(self,model,old_num_classes, new_num_classes, init_value=0.01):
+        if self.step==1:
+            pesos_core=[capa.get_weights() for capa in model.layers]
+            nuevo_modelo = self.build_model(num_classes=new_num_classes)
+            dummy_input = np.random.rand(1, 32, 32, 3)
+            nuevo_modelo.predict(dummy_input)
+            print("resumen antiguo modelo")
+            model.summary()
+            print("resumen modelo nuevo")
+            nuevo_modelo.summary()
+            for i in range(len(pesos_core)):
+                nuevo_modelo.layers[i].set_weights(pesos_core[i])
+            for layer in nuevo_modelo.layers[:-1]:
+                layer.trainable = False
+            old_weights, old_bias = nuevo_modelo.layers[-1].get_weights()
+            new_weights = np.full((old_weights.shape[0], new_num_classes), init_value, dtype=np.float32)
+            new_bias = np.full((new_num_classes,), init_value, dtype=np.float32)
+            nuevo_modelo.layers[-1].set_weights([new_weights, new_bias])
+            return nuevo_modelo,None,None
+        else:
+            pesos_intermedios = [capa.get_weights() for capa in model.layers[:-1]]
+            nuevo_modelo = self.build_model(num_classes=new_num_classes)
+            old_weights, old_bias = model.layers[-1].get_weights()  
+                      
+            dummy_input = np.random.rand(1, 32, 32, 3)
+            nuevo_modelo.predict(dummy_input)
+
+            for i in range(len(pesos_intermedios)):
+                nuevo_modelo.layers[i].set_weights(pesos_intermedios[i])
+            for layer in nuevo_modelo.layers[:-1]:
+                layer.trainable = False
+            new_weights = np.full((old_weights.shape[0], new_num_classes), init_value, dtype=np.float32)
+            new_bias = np.full((new_num_classes,), init_value, dtype=np.float32)
+
+            nuevo_modelo.layers[-1].set_weights([new_weights, new_bias])
+            
+            return nuevo_modelo,old_weights, old_bias
     def modify_output_layer_CWR(self,old_model, old_num_classes, new_num_classes, init_value=0.01):
         """
         Modifica la capa de sortida del model per adaptar-la a un nou nombre de classes segons el mètode CWR.
@@ -702,15 +773,12 @@ class IncrementalLearning:
             pesos_intermedios = [capa.get_weights() for capa in old_model.layers[:-1]]
             nuevo_modelo = self.build_model(num_classes=new_num_classes)
             old_weights, old_bias = old_model.layers[-1].get_weights()  
-            # Forzar la construcción del modelo pasando un dummy input
             dummy_input = np.random.rand(1, 32, 32, 3)
             nuevo_modelo.predict(dummy_input)
 
-            # Asignar los pesos guardados a las capas compartidas
             for i in range(len(pesos_intermedios)):
                 nuevo_modelo.layers[i].set_weights(pesos_intermedios[i])
             
-            # Inicializar la nueva capa de salida:
             new_weights = np.full((old_weights.shape[0], new_num_classes), init_value, dtype=np.float32)
             new_bias = np.full((new_num_classes,), init_value, dtype=np.float32)
 
@@ -724,16 +792,13 @@ class IncrementalLearning:
             nuevo_modelo = self.build_model(num_classes=new_num_classes)
             old_weights, old_bias = old_model.layers[-1].get_weights()  
                       
-            # Forzar la construcción del modelo pasando un dummy input
             dummy_input = np.random.rand(1, 32, 32, 3)
             nuevo_modelo.predict(dummy_input)
 
-            # Asignar los pesos guardados a las capas compartidas
             for i in range(len(pesos_intermedios)):
                 nuevo_modelo.layers[i].set_weights(pesos_intermedios[i])
             for layer in nuevo_modelo.layers[:-1]:
                 layer.trainable = False
-            # Inicializar la nueva capa de salida:
             new_weights = np.full((old_weights.shape[0], new_num_classes), init_value, dtype=np.float32)
             new_bias = np.full((new_num_classes,), init_value, dtype=np.float32)
 
@@ -745,19 +810,15 @@ class IncrementalLearning:
         """MODIFICA LA CAPA DE SORTIDA DEL MODEL SEGONS EL MÈTODE MULTI-HEAD."""
         total_backbone_layers=len(self.build_backbone().layers)
         
-        # Paso 1: recuperar pesos si hay modelo anterior
         if not is_first_epoch:
             base_layers = model.layers[:total_backbone_layers]
-            # Guardar pesos del backbone
             pesos_intermedios = [layer.get_weights() for layer in base_layers]
             
         else:
             base_layers = model.layers[:total_backbone_layers]
             pesos_intermedios = None
 
-        # Paso 2: construir nuevo backbone
         backbone_model = self.build_backbone()
-        # Restaurar pesos del backbone si existen
         if pesos_intermedios is not None:
             for i, layer in enumerate(backbone_model.layers):
                 layer.set_weights(pesos_intermedios[i])
@@ -766,7 +827,6 @@ class IncrementalLearning:
         base_output = backbone_model.output
         base_output_shape = base_output.shape[1:]     
         if freeze_backbone:
-            # Congelar backbone si no es la primera época
             if not is_first_epoch:
                 for layer in backbone_model.layers:
                     layer.trainable = False
@@ -796,10 +856,8 @@ class IncrementalLearning:
         base_output_tensor = base_layers[-1].output
         base_output_shape = base_output_tensor.shape[1:]
 
-        # Guardar pesos del backbone
         pesos_intermedios = [layer.get_weights() for layer in base_layers]
 
-        # Guardar pesos de heads anteriores
         pesos_heads = {}
         if old_num_classes>0:
            
@@ -810,7 +868,6 @@ class IncrementalLearning:
                 pesos_heads[f"head_class_{i}"]=pesos_head_i
                 
     
-        #normalitzar noves heads
         for i in range(old_num_classes,num_classes):
             head=model_tw.get_layer(f"head_class_{i}")
             pesos_head_i=[]
@@ -825,7 +882,6 @@ class IncrementalLearning:
                     #tw_pesos-=norm
                 
                 pesos_head_i.append([tw_pesos, tw_biases])
-        #afegir noves heads
             pesos_heads[f"head_class_{i}"]=pesos_head_i
 
         print("Pesos guardados de backbone y heads:")
@@ -833,7 +889,6 @@ class IncrementalLearning:
         print(f"Heads guardadas:",pesos_heads.keys())
         backbone_model = self.build_backbone()      
 
-        # Restaurar pesos del backbone si existen
         if pesos_intermedios is not None:
             for i, layer in enumerate(backbone_model.layers):
                 if len(layer.get_weights()) != 0: 
@@ -841,12 +896,10 @@ class IncrementalLearning:
                 
         base_output = backbone_model.output
              
-        # Paso 3: construir heads
         all_heads = []
         head_models = []
         for i in range(num_classes):
             head = self.build_head(base_output_shape,name=f"head_class_{i}")
-            # Restaurar pesos 
            
             pesos_head_i = pesos_heads[f"head_class_{i}"]
             for j, layer in enumerate(head.layers):
@@ -860,7 +913,6 @@ class IncrementalLearning:
             all_heads.append(head_output)
             head_models.append(head)
 
-        # Paso 4: construir modelo completo
         final_output = layers.Concatenate(name="multi_head_output")(all_heads)
         new_model = Model(inputs=backbone_model.input, outputs=final_output)
 
@@ -871,25 +923,20 @@ class IncrementalLearning:
         Actualitza la capa de sortida del model .
         """
         tw_pesos, tw_biases = model_tw.layers[-1].get_weights()     
-        # Normaliza cada vector de pesos de la última capa
         for i in range(num_classes):
             norm = np.mean(tw_pesos[:, i])
             if norm > 0:
                 tw_pesos[:,i] -= norm
      
-        # Crear nuevos pesos combinados
         new_w = np.zeros((tw_pesos.shape[0], num_classes))
         new_b = np.zeros((num_classes,))
         
-        # Copiar clases anteriores
         new_w[:, :old_num_classes] = cw_pesos[:, :old_num_classes]
         new_b[:old_num_classes] = cw_biases[:old_num_classes]
 
-        # Copiar nuevas clases
         new_w[:, old_num_classes:num_classes] = tw_pesos[:, old_num_classes:num_classes]
         new_b[old_num_classes:num_classes] = tw_biases[old_num_classes:num_classes]
 
-        # Asignar los nuevos pesos
         model_tw.layers[-1].set_weights([new_w, new_b])
         model_tw.layers[-1].trainable = True
 
@@ -907,7 +954,7 @@ class IncrementalLearning:
             class_names= ["airplane", "automobile", "bird", "cat", "deer","dog", "frog", "horse", "ship", "truck"]
 
         if self.dataset=='cifar100':
-            class_names = [
+            """class_names = [
                 'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee',
                 'beetle', 'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus',
                 'butterfly', 'camel', 'can', 'castle', 'caterpillar', 'cattle',
@@ -925,11 +972,16 @@ class IncrementalLearning:
                 'tank', 'telephone', 'television', 'tiger', 'tractor', 'train',
                 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree',
                 'wolf', 'woman', 'worm'
-            ]
+            ]"""
+            class_names=[]
         if y:
             cm_test = confusion_matrix(test_labels_normal, predicted_classes_test)
             plt.figure(figsize=(10, 8))
-            sns.heatmap(cm_test, annot=True, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels= class_names)
+            if self.dataset=='cifar100' :
+                sns.heatmap(cm_test, annot=False, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels= class_names)
+
+            if self.dataset=='cifar10' :
+                sns.heatmap(cm_test, annot=True, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels= class_names)
             plt.xlabel('Predicción')
             plt.ylabel('Etiqueta Real')
             plt.title('Matriz de Confusión - Conjunto de Test')
@@ -975,11 +1027,10 @@ class IncrementalLearning:
             return model
         else:
             print("Carregant el model preentrenat...")
-            model=models.load_model(self.pretrained)
+            #model=models.load_model(self.pretrained)
+            model = models.load_model(self.pretrained, custom_objects={'function': categorical_crossentropy} )            
             return model
-    
-    
-    
+      
     def train(self,num_samples,landa_si=1e7,landa_ewc=0.1,pat=20,min_epoch=10,L_R=0.05,max_F=50,wi=0.005,mh_freeze=False,num_epocas=30, num_classes_ini=2, num_classes_fin=10, incr_class=1,early_stop_th=0.01):
         
         
@@ -990,9 +1041,13 @@ class IncrementalLearning:
 
         #Inicialització del model i variables d'entrenament
         do_train=True
-        self.model = self.pretrain()
+        if self.metodo=='AsyCLR':
+            self.model = self.backbone_model()
+            self.model.load_weights('asycon_backbone_first.h5') 
+        else:
+            self.model = self.pretrain()
         learning_rate=L_R
-        num_steps = num_classes_fin
+        num_steps = int(num_classes_fin//incr_class)
         num_classes = num_classes_ini
         early_stop_min_epoch=min_epoch
 
@@ -1037,8 +1092,21 @@ class IncrementalLearning:
 
             elif self.NC_NIC=="NC":
                 if step>1:
-                    train_images_batch, train_labels_batch = self.extract_from_class(num_classes-1,num_samples/num_classes_fin,train_images,train_labels) #extracció de dades per a les classes actuals
-                    
+                    if self.dataset=='cifar10':
+                        train_images_batch, train_labels_batch = self.extract_from_class(num_classes-1,num_samples/num_classes_fin,train_images,train_labels) #extracció de dades per a les classes actuals
+                    if self.dataset=='cifar100':
+                        train_images_batch = []
+                        train_labels_batch = []
+                        
+                        start_class = num_classes - incr_class
+                        end_class = num_classes
+                        
+                        for c in range(start_class, end_class):
+                            imgs, lbls = self.extract_from_class(c, int(num_samples/num_classes_fin), train_images, train_labels)
+                            train_images_batch.append(imgs)
+                            train_labels_batch.append(lbls)
+                        train_images_batch = np.concatenate(train_images_batch, axis=0) 
+                        train_labels_batch = np.concatenate(train_labels_batch, axis=0) 
                     train_labels_batch = to_categorical(train_labels_batch, num_classes=num_classes)
 
                     len_train = train_images_batch.shape[0]
@@ -1100,9 +1168,12 @@ class IncrementalLearning:
                 
                 if self.metodo=='lwf':
                     if step==1:
+                        lr=0.005
                         self.model = self.modify_output_layer(self.model, 10, num_classes)
 
                     else:
+                        lr=L_R
+
                         self.model = self.modify_output_layer(self.model, old_classes, num_classes)
 
                     old_model = tf.keras.models.clone_model(self.model)
@@ -1130,8 +1201,6 @@ class IncrementalLearning:
 
                     self.opt_weights=[tf.identity(var) for layer in self.model.layers for var in layer.trainable_variables]
                     loss_fn=self.loss_ewc
-
-
 
                 if self.metodo=='si':
                     self.model=self.modify_output_layer(self.model,old_classes,num_classes)
@@ -1219,7 +1288,10 @@ class IncrementalLearning:
                         lr=L_R
                         self.opt_weights=self.model.get_weights()
                         self.model=self.modify_MH_output_layer(self.model,old_classes,num_classes,is_first_epoch=False,freeze_backbone=mh_freeze)
-                        loss_fn=self.loss_si
+                        if not mh_freeze:
+                            loss_fn=self.loss_si
+                        else:
+                            loss_fn=categorical_crossentropy
 
                 if self.metodo=='ctive':
                     lr=L_R
@@ -1227,7 +1299,7 @@ class IncrementalLearning:
                     loss_fn=categorical_crossentropy
 
                 if self.metodo=='naive':
-                    lr_=L_R
+                    lr=L_R
                     if step==1:
                         self.model=self.modify_output_layer(self.model,10,num_classes)
 
@@ -1235,7 +1307,17 @@ class IncrementalLearning:
                         self.model=self.modify_output_layer(self.model,old_classes,num_classes)
                     loss_fn=categorical_crossentropy
 
-
+                if self.metodo=='AsyCLR':
+                    lr=L_R
+                    do_train=False
+                    loss_fn=categorical_crossentropy
+                    if step==1:
+                        self.model,cw_weights,cw_bias=self.modify_output_layer_AsyCLR(self.model,0,num_classes)
+                        epochs=15
+                        lr=0.001
+                    else: 
+                        self.model,cw_weights,cw_biases=self.modify_output_layer_AsyCLR(self.model,old_classes,num_classes)
+                    self.model.summary()
             
 
 
@@ -1274,7 +1356,7 @@ class IncrementalLearning:
                                 
                             previous_weights = [tf.identity(var) for layer in self.model.layers[:-1] for var in layer.trainable_variables]
                                 
-                        if self.metodo=='armh':
+                        if self.metodo=='armh' and not mh_freeze:
                             actual_weights = [tf.identity(w) for w in self.model.trainable_variables]
                             if step==1:
                                 previous_weights=actual_weights
@@ -1296,14 +1378,15 @@ class IncrementalLearning:
                         
                         
                         grads = tape.gradient(loss, self.model.trainable_variables)
+                        #grads = [tf.clip_by_value(g, -5.0, 5.0) for g in grads]
                         #print("grads:", grads)
                         opt.apply_gradients(zip(grads, self.model.trainable_variables))
                         epoch_loss.append(loss.numpy())
                         
-                    if epoch==5 and step>1:
+                    if epoch==5 and step>1 and self.metodo in ['ar1','si','ewc']:
                         print("Fisher matrix distribution after 5 epochs:")
                         print("Fisher matrix", self.fisher_matrix)
-                        self.histograma_F(self.fisher_matrix)  
+                        #self.histograma_F(self.fisher_matrix)  
                     
                     
                     ##validació
@@ -1352,7 +1435,7 @@ class IncrementalLearning:
 
                 self.model=model_best
                 
-                if step>1 and (self.metodo=='cwr' or self.metodo=='ar1'):                   
+                if step>1 and (self.metodo=='cwr' or self.metodo=='ar1' or self.metodo=='AsyCLR'):                   
                     self.model=self.update_last_layer(self.model,cw_weights, cw_biases, num_classes, old_classes)
                 if self.metodo=='armh':
                     if step==1:
@@ -1379,7 +1462,9 @@ class IncrementalLearning:
                 num_classes += incr_class
           
                 first=False
-
+            if step>0:
+                name_model=str(self.metodo+'_'+ self.tipo_CNN+'_'+self.dataset+'_step_'+str(step))
+                self.model.save('trained_models/'+name_model+'.keras')
           # Graficar la pérdida
         plt.figure(figsize=(10, 5))
         plt.plot(train_losses, label='Train Loss')
@@ -1397,19 +1482,17 @@ class IncrementalLearning:
 
 
 
-        ###IMPORTANT: APART DEL GRÀFIC QUE TORNI TMB EL VECTOR D'ACCURACIIES
 
         print("Accuracies per a tot el dataset: ",accuracies_test)
         print("Accuracies per a les classes entrenades: ",accuracies_test_class)
         
-        #GRAFICO ACCURACY
+        #GRAFIC ACCURACY
         inicio = 1
         fin = len(accuracies_test)
         epochs=range(1,11)
         plt.figure(figsize=(10, 5))
         plt.plot(epochs,accuracies_test, marker='x', label='Test Accuracy for all dataset')
         plt.plot(epochs,accuracies_test_class, marker='o', label='Test Accuracy for trained classes')
-        # Añadir líneas verticales y etiquetas "2 classes", "3 classes", etc.
         for epoch in range(inicio, fin):
             plt.axvline(x=epoch, color='gray', linestyle='--', linewidth=1)
             plt.text(epoch + 0.1, max(accuracies_test)*0.95, f"{epoch} classes",
@@ -1421,7 +1504,6 @@ class IncrementalLearning:
                     fontsize=9,
                     color='blue',
                     arrowprops=dict(arrowstyle="->", color='blue'))
-        # Ajustes del gráfico
         plt.xticks(epochs)
         plt.title('Accuracy vs Epochs')
         plt.xlabel('Epochs')
